@@ -181,10 +181,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Get latest PR body
+        uses: actions/github-script@v6
+        id: get-pr-body
+        with:
+          script: |
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            return pullRequest.body;
+
       - name: Parse SDK commit message
         id: parse-commit-message
         env:
-          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BODY: ${{ steps.get-pr-body.outputs.result }}
         run: |
           # Read the PR description from environment variable
           PR_DESCRIPTION="$PR_BODY"

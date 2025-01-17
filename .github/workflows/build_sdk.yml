@@ -16,7 +16,7 @@ env:
 
 jobs:
   preview-sdk:
-    if: github.event.action != 'closed'
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
 
     steps:
@@ -107,7 +107,7 @@ jobs:
               if (outcome.commit) {
                 const { owner, name, branch } = outcome.commit.repo;
                 githubUrl = `https://github.com/${owner}/${name}/tree/${branch}`;
-                studioUrl = `https://app.stainlessapi.com/${process.env.STAINLESS_ORG_NAME}/${process.env.STAINLESS_PROJECT_NAME}/studio?branch=${branch}`;
+                studioUrl = `https://app.stainlessapi.com/${process.env.STAINLESS_ORG_NAME}/${process.env.STAINLESS_PROJECT_NAME}/studio?language=${lang}&branch=${branch}`;
 
                 if (parentOutcome.commit) {
                   const base = parentOutcome.commit.sha;
@@ -174,7 +174,7 @@ jobs:
                 });
               }
   merge-sdk:
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
 
     steps:

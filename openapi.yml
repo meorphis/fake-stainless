@@ -39,7 +39,7 @@ paths:
   /v1/builds/{project}:
     get:
       summary: List builds
-      description: Retrieve a list of builds for a project
+      description: Retrieve a list of builds for a project!
       parameters:
         - name: project
           in: path

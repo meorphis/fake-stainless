@@ -16,7 +16,7 @@ env:
 
 jobs:
   preview-sdk:
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
 
     steps:
@@ -90,9 +90,6 @@ jobs:
 
       - name: Comment on Pull Request
         uses: actions/github-script@v6
-        env:
-          STAINLESS_ORG_NAME: ${{ env.STAINLESS_ORG_NAME }}
-          STAINLESS_PROJECT_NAME: ${{ env.STAINLESS_PROJECT_NAME }}
         with:
           script: |
             const results = JSON.parse(`${{ steps.process-results.outputs.build_sdk_results }}`);
@@ -174,7 +171,7 @@ jobs:
                 });
               }
   merge-sdk:
-    if: github.event.action != 'closed'
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
 
     steps:
@@ -218,3 +215,60 @@ jobs:
           merge_branch: preview/${{ github.head_ref }}
           guess_config: false
 
+      - name: Process SDK Build Results
+        id: process-results
+        run: |
+          if [ -f build_sdk_results.json ]; then
+            RESULTS=$(jq -c '.' build_sdk_results.json)
+            echo "build_sdk_results=${RESULTS}" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_sdk_results.json not found."
+            echo "build_sdk_results={}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment on Pull Request
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const results = JSON.parse(`${{ steps.process-results.outputs.build_sdk_results }}`);
+            const outcomes = results.outcomes || {};
+
+            const generateRow = (lang, outcome) => {
+              let githubUrl;
+              let studioUrl;
+
+              if (outcome.commit) {
+                const { owner, name, branch } = outcome.commit.repo;
+                studioUrl = `https://app.stainlessapi.com/${process.env.STAINLESS_ORG_NAME}/${process.env.STAINLESS_PROJECT_NAME}/studio?language=${lang}&branch=main`;
+              }
+
+              const studioLink = studioUrl ? `[Studio](${studioUrl})` : '';
+
+              return `
+            | ${lang} | ${outcome.conclusion} | ${studioLink} |`;
+            };
+
+              const header = `
+            | Language | Conclusion | Studio |
+            |----------|------------|--------|`;
+
+              const tableRows = Object.keys(outcomes)
+                .map(lang => {
+                  const outcome = outcomes[lang];
+                  return generateRow(lang, outcome);
+                })
+                .join("");
+
+              const commentBody = `
+            ### :rocket: SDK Build Status
+            The following table summarizes the build outcomes for all languages:
+
+            ${header}${tableRows}
+              `;
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: commentBody,
+              });

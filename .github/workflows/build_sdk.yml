@@ -90,9 +90,6 @@ jobs:
 
       - name: Comment on Pull Request
         uses: actions/github-script@v6
-        env:
-          STAINLESS_ORG_NAME: ${{ env.STAINLESS_ORG_NAME }}
-          STAINLESS_PROJECT_NAME: ${{ env.STAINLESS_PROJECT_NAME }}
         with:
           script: |
             const results = JSON.parse(`${{ steps.process-results.outputs.build_sdk_results }}`);
@@ -107,9 +104,9 @@ jobs:
               if (outcome.commit) {
                 const { owner, name, branch } = outcome.commit.repo;
                 githubUrl = `https://github.com/${owner}/${name}/tree/${branch}`;
-                studioUrl = `https://app.stainlessapi.com/${process.env.STAINLESS_ORG_NAME}/${process.env.STAINLESS_PROJECT_NAME}/studio?branch=${branch}`;
+                studioUrl = `https://app.stainlessapi.com/${process.env.STAINLESS_ORG_NAME}/${process.env.STAINLESS_PROJECT_NAME}/studio?language=${lang}&branch=${branch}`;
 
-                if (parentOutcome.commit) {
+                if (parentOutcome?.commit) {
                   const base = parentOutcome.commit.sha;
                   const head = branch;
                   compareUrl = `https://github.com/${owner}/${name}/compare/${base}..${head}`;
@@ -181,10 +178,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Get latest PR body
+        uses: actions/github-script@v6
+        id: get-pr-body
+        with:
+          script: |
+            const { data: pullRequest } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.issue.number
+            });
+            return pullRequest.body;
+
       - name: Parse SDK commit message
         id: parse-commit-message
         env:
-          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_BODY: ${{ steps.get-pr-body.outputs.result }}
         run: |
           # Read the PR description from environment variable
           PR_DESCRIPTION="$PR_BODY"
@@ -206,3 +215,60 @@ jobs:
           merge_branch: preview/${{ github.head_ref }}
           guess_config: false
 
+      - name: Process SDK Build Results
+        id: process-results
+        run: |
+          if [ -f build_sdk_results.json ]; then
+            RESULTS=$(jq -c '.' build_sdk_results.json)
+            echo "build_sdk_results=${RESULTS}" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_sdk_results.json not found."
+            echo "build_sdk_results={}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment on Pull Request
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const results = JSON.parse(`${{ steps.process-results.outputs.build_sdk_results }}`);
+            const outcomes = results.outcomes || {};
+
+            const generateRow = (lang, outcome) => {
+              let githubUrl;
+              let studioUrl;
+
+              if (outcome.commit) {
+                const { owner, name, branch } = outcome.commit.repo;
+                studioUrl = `https://app.stainlessapi.com/${process.env.STAINLESS_ORG_NAME}/${process.env.STAINLESS_PROJECT_NAME}/studio?language=${lang}&branch=main`;
+              }
+
+              const studioLink = studioUrl ? `[Studio](${studioUrl})` : '';
+
+              return `
+            | ${lang} | ${outcome.conclusion} | ${studioLink} |`;
+            };
+
+              const header = `
+            | Language | Conclusion | Studio |
+            |----------|------------|--------|`;
+
+              const tableRows = Object.keys(outcomes)
+                .map(lang => {
+                  const outcome = outcomes[lang];
+                  return generateRow(lang, outcome);
+                })
+                .join("");
+
+              const commentBody = `
+            ### :rocket: SDK Build Status
+            The following table summarizes the build outcomes for all languages:
+
+            ${header}${tableRows}
+              `;
+
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: commentBody,
+              });

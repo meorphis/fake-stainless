@@ -1,0 +1,208 @@
+name: Build SDK
+
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - closed
+
+env:
+  OAS_PATH: openapi.yml
+  CONFIG_PATH: ''
+  STAINLESS_ORG_NAME: meorphis-test
+  STAINLESS_PROJECT_NAME: fake-stainless
+
+jobs:
+  preview-sdk:
+    if: github.event.action != 'closed'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get merge base
+        id: merge-base
+        run: |
+          BASE_SHA=$(git rev-parse "${GITHUB_SHA}^1")
+          echo "Merge base: $BASE_SHA"
+          echo "merge_base_sha=$BASE_SHA" >> $GITHUB_OUTPUT
+
+      - name: Compute MD5 hash of old OpenAPI spec
+        id: old-oas-hash
+        run: |
+          # Check out the merge base
+          git checkout ${{ steps.merge-base.outputs.merge_base_sha }}
+
+          # Compute oas MD5 hash if the file exists
+          if [ -f "${{ env.OAS_PATH }}" ]; then
+            MD5_HASH=$(md5sum "${{ env.OAS_PATH }}" | awk '{ print $1 }')
+          else
+            echo "File ${{ env.OAS_PATH }} does not exist at merge base."
+            MD5_HASH=""
+          fi
+
+          # Output the hash
+          echo "old_oas_hash=$MD5_HASH" >> $GITHUB_OUTPUT
+          echo "old_oas_hash=$MD5_HASH"
+
+          # Compute config MD5 hash if the file exists
+          if [ -f "${{ env.CONFIG_PATH }}" ]; then
+            MD5_HASH_CONFIG=$(md5sum "${{ env.CONFIG_PATH }}" | awk '{ print $1 }')
+          else
+            echo "File ${{ env.CONFIG_PATH }} does not exist at merge base."
+            MD5_HASH_CONFIG=""
+          fi
+
+          # Output the hash
+          echo "old_config_hash=$MD5_HASH_CONFIG" >> $GITHUB_OUTPUT
+          echo "old_config_hash=$MD5_HASH_CONFIG"
+
+          # Switch back to the merge commit
+          git checkout ${GITHUB_SHA}
+
+      - name: Build SDK
+        uses: stainless-api/build-sdk-action@main
+        with:
+          stainless_api_key: ${{ secrets.STAINLESS_API_KEY }}
+          oas_path: ${{ env.OAS_PATH }}
+          project_name: ${{ env.STAINLESS_PROJECT_NAME }}
+          parent_oas_hash: ${{ steps.old-oas-hash.outputs.old_oas_hash }}
+          parent_config_hash: ${{ steps.old-oas-hash.outputs.old_config_hash }}
+          parent_branch: ${{ github.base_ref }}
+          branch: preview/${{ github.head_ref }}
+          guess_config: false
+
+      - name: Process SDK Build Results
+        id: process-results
+        run: |
+          if [ -f build_sdk_results.json ]; then
+            RESULTS=$(jq -c '.' build_sdk_results.json)
+            echo "build_sdk_results=${RESULTS}" >> "$GITHUB_OUTPUT"
+          else
+            echo "build_sdk_results.json not found."
+            echo "build_sdk_results={}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Comment on Pull Request
+        uses: actions/github-script@v6
+        env:
+          STAINLESS_ORG_NAME: ${{ env.STAINLESS_ORG_NAME }}
+          STAINLESS_PROJECT_NAME: ${{ env.STAINLESS_PROJECT_NAME }}
+        with:
+          script: |
+            const results = JSON.parse(`${{ steps.process-results.outputs.build_sdk_results }}`);
+            const outcomes = results.outcomes || {};
+            const parentOutcomes = results.parentOutcomes || {};
+
+            const generateRow = (lang, outcome, parentOutcome) => {
+              let githubUrl;
+              let studioUrl;
+              let compareUrl;
+
+              if (outcome.commit) {
+                const { owner, name, branch } = outcome.commit.repo;
+                githubUrl = `https://github.com/${owner}/${name}/tree/${branch}`;
+                studioUrl = `https://app.stainlessapi.com/${process.env.STAINLESS_ORG_NAME}/${process.env.STAINLESS_PROJECT_NAME}/studio?branch=${branch}`;
+
+                if (parentOutcome.commit) {
+                  const base = parentOutcome.commit.sha;
+                  const head = branch;
+                  compareUrl = `https://github.com/${owner}/${name}/compare/${base}..${head}`;
+                }
+              }
+
+              const githubLink = githubUrl ? `[Branch](${githubUrl})` : '';
+              const studioLink = studioUrl ? `[Studio](${studioUrl})` : '';
+              const compareLink = compareUrl ? `[Diff](${compareUrl})` : '';
+
+              return `
+            | ${lang} | ${outcome.conclusion} | ${githubLink} | ${studioLink} | ${compareLink} |`;
+            };
+
+              const header = `
+            | Language | Conclusion | Branch | Studio | Diff |
+            |----------|------------|--------|--------|------|`;
+
+              const tableRows = Object.keys(outcomes)
+                .map(lang => {
+                  const outcome = outcomes[lang];
+                  const parentOutcome = parentOutcomes[lang];
+                  return generateRow(lang, outcome, parentOutcome);
+                })
+                .join("");
+
+              const commentBody = `
+            ### :sparkles: SDK Previews
+            The following table summarizes the build outcomes for all languages:
+
+            ${header}${tableRows}
+
+            You can freely modify the branches to add [custom code](https://app.stainlessapi.com/docs/guides/patch-custom-code).
+              `;
+
+              // Check for existing comment
+              const { data: comments } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+              });
+
+              const existingComment = comments.find((comment) =>
+                comment.body.includes("### :sparkles: SDK Previews")
+              );
+
+              if (existingComment) {
+                // Edit the existing comment
+                await github.rest.issues.updateComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: existingComment.id,
+                  body: commentBody,
+                });
+              } else {
+                // Create a new comment
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: context.payload.pull_request.number,
+                  body: commentBody,
+                });
+              }
+  merge-sdk:
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Parse SDK commit message
+        id: parse-commit-message
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          # Read the PR description from environment variable
+          PR_DESCRIPTION="$PR_BODY"
+
+          # Use grep to safely extract the commit message between backticks
+          COMMIT_MESSAGE=$(echo "$PR_DESCRIPTION" | grep -oP '`SDK commit message:\s*\K[^`]+' || echo "")
+
+          echo "commit_message=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
+          echo "commit_message=$COMMIT_MESSAGE"
+
+      - name: Build SDK
+        uses: stainless-api/build-sdk-action@main
+        with:
+          stainless_api_key: ${{ secrets.STAINLESS_API_KEY }}
+          oas_path: ${{ env.OAS_PATH }}
+          project_name: ${{ env.STAINLESS_PROJECT_NAME }}
+          commit_message: ${{ steps.parse-commit-message.outputs.commit_message }}
+          branch: main
+          merge_branch: preview/${{ github.head_ref }}
+          guess_config: false
+

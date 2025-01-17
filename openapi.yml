@@ -1,0 +1,364 @@
+openapi: 3.0.0
+info:
+  title: Builds API
+  version: '1.0.0'
+  description: API for managing and retrieving build information
+
+paths:
+  /v1/builds/{id}/outputs/{target}:
+    get:
+      summary: Retrieve build output
+      description: Get the output status and details for a specific target for a specific build
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+          description: The build ID
+        - name: target
+          in: path
+          required: true
+          schema:
+            $ref: '#/components/schemas/SupportedTarget'
+          description: The target to get the output for
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BuildOutputResponse'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Build not found
+      security:
+        - ApiKeyAuth: []
+
+  /v1/builds:
+    get:
+      summary: List builds
+      description: Retrieve a list of builds for a project
+      parameters:
+        - name: project
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Project name
+        - name: spec_hash
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional filter - the md5 hash of the OpenAPI spec used for the build
+        - name: config_hash
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional filter - the md5 hash of the Stainless config used for the build
+        - name: branch
+          in: query
+          required: false
+          schema:
+            type: string
+          description: Optional filter - the branch the build was created on
+        - name: limit
+          in: query
+          required: false
+          schema:
+            type: integer
+          description: Optional limit for number of results
+      responses:
+        '200':
+          description: Successful response
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/BuildResponse'
+        '401':
+          description: Unauthorized
+        '404':
+          description: Project not found
+      security:
+        - ApiKeyAuth: []
+
+  /api/spec:
+    post:
+      summary: Create a build
+      description: Create a build by uploading a spec along with some other info
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required:
+                - project
+                - oasSpec
+              properties:
+                project:
+                  type: string
+                  required: true
+                  description: The name of the project to create the build in
+                oasSpec:
+                  type: string
+                  format: binary
+                  required: true
+                  description: The OpenAPI spec to upload
+                stainlessConfig:
+                  type: string
+                  format: binary
+                  description: The Stainless Config to upload
+                commitMessage:
+                  type: string
+                  description: The commit message to use in any resultant commits to the SDK repo
+                guessConfig:
+                  type: boolean
+                  description: Whether or not to use an LLM to automatically guess config changes
+                branch:
+                  type: string
+                  description: The name of the Stainless branch to upload the spec to
+                parentBuildId:
+                  type: string
+                  description: The ID of the parent build
+      responses:
+        '200':
+          description: Successful response
+          headers:
+            X-Stainless-Project-Build-ID:
+              schema:
+                type: string
+                nullable: true
+              description: The ID of the build that is created
+        '401':
+          description: Unauthorized
+        '404':
+          description: Project not found
+
+components:
+  schemas:
+    BuildStepOutputNotStarted:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          const: not_started
+
+    BuildStepOutputQueued:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          const: queued
+
+    BuildStepOutputInProgress:
+      type: object
+      required:
+        - status
+      properties:
+        status:
+          type: string
+          const: in_progress
+
+    CommitMissingShape:
+      type: object
+      required:
+        - conclusion
+      properties:
+        conclusion:
+          $ref: '#/components/schemas/CommitMissingConclusion'
+
+    CommitPresentShape:
+      type: object
+      required:
+        - conclusion
+        - commit
+      properties:
+        conclusion:
+          $ref: '#/components/schemas/CommitPresentConclusion'
+        commit:
+          type: object
+          required:
+            - sha
+            - repo
+          properties:
+            sha:
+              type: string
+            repo:
+              type: object
+              required:
+                - owner
+                - name
+                - branch
+              properties:
+                owner:
+                  type: string
+                name:
+                  type: string
+                branch:
+                  type: string
+
+    LintCompletedShape:
+      type: object
+      required:
+        - conclusion
+      properties:
+        conclusion:
+          $ref: '#/components/schemas/CheckConclusion'
+
+    TestCompletedShape:
+      type: object
+      required:
+        - conclusion
+      properties:
+        conclusion:
+          $ref: '#/components/schemas/CheckConclusion'
+
+    CommitBuildStepOutputCompleted:
+      type: object
+      required:
+        - status
+        - completed
+      properties:
+        status:
+          type: string
+          const: completed
+        completed:
+          anyOf:
+            - $ref: '#/components/schemas/CommitMissingShape'
+            - $ref: '#/components/schemas/CommitPresentShape'
+          discriminator:
+            propertyName: conclusion
+
+    LintBuildStepOutputCompleted:
+      type: object
+      required:
+        - status
+        - completed
+      properties:
+        status:
+          type: string
+          const: completed
+        completed:
+          $ref: '#/components/schemas/LintCompletedShape'
+
+    TestBuildStepOutputCompleted:
+      type: object
+      required:
+        - status
+        - completed
+      properties:
+        status:
+          type: string
+          const: completed
+        completed:
+          $ref: '#/components/schemas/TestCompletedShape'
+
+    CommitBuildStep:
+      anyOf:
+        - $ref: '#/components/schemas/BuildStepOutputNotStarted'
+        - $ref: '#/components/schemas/BuildStepOutputQueued'
+        - $ref: '#/components/schemas/BuildStepOutputInProgress'
+        - $ref: '#/components/schemas/CommitBuildStepOutputCompleted'
+      discriminator:
+        propertyName: status
+
+    LintBuildStep:
+      anyOf:
+        - $ref: '#/components/schemas/BuildStepOutputNotStarted'
+        - $ref: '#/components/schemas/BuildStepOutputQueued'
+        - $ref: '#/components/schemas/BuildStepOutputInProgress'
+        - $ref: '#/components/schemas/LintBuildStepOutputCompleted'
+      discriminator:
+        propertyName: status
+
+    TestBuildStep:
+      anyOf:
+        - $ref: '#/components/schemas/BuildStepOutputNotStarted'
+        - $ref: '#/components/schemas/BuildStepOutputQueued'
+        - $ref: '#/components/schemas/BuildStepOutputInProgress'
+        - $ref: '#/components/schemas/TestBuildStepOutputCompleted'
+      discriminator:
+        propertyName: status
+
+    BuildOutputResponse:
+      type: object
+      required:
+        - commit
+        - lint
+        - test
+      properties:
+        commit:
+          $ref: '#/components/schemas/CommitBuildStep'
+        lint:
+          $ref: '#/components/schemas/LintBuildStep'
+        test:
+          $ref: '#/components/schemas/TestBuildStep'
+
+    CheckConclusion:
+      type: string
+      enum:
+        - success
+        - failure
+        - skipped
+        - cancelled
+        - action_required
+        - neutral
+        - timed_out
+
+    CommitPresentConclusion:
+      type: string
+      enum:
+        - error
+        - success
+        - warning
+        - note
+
+    CommitMissingConclusion:
+      type: string
+      enum:
+        - cancelled
+        - timed_out
+        - fatal
+        - payment_required
+        - noop
+        - merge_conflict
+        - version_bump
+
+    BuildResponse:
+      type: object
+      required:
+        - id
+      properties:
+        id:
+          type: string
+
+    SupportedTarget:
+      type: string
+      enum:
+        - node
+        - python
+        - go
+        - java
+        - kotlin
+        - ruby
+        - typescript
+
+  securitySchemes:
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: API key authentication
+
+security:
+  - ApiKeyAuth: []

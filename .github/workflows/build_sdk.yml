@@ -106,7 +106,7 @@ jobs:
                 githubUrl = `https://github.com/${owner}/${name}/tree/${branch}`;
                 studioUrl = `https://app.stainlessapi.com/${process.env.STAINLESS_ORG_NAME}/${process.env.STAINLESS_PROJECT_NAME}/studio?language=${lang}&branch=${branch}`;
 
-                if (parentOutcome.commit) {
+                if (parentOutcome?.commit) {
                   const base = parentOutcome.commit.sha;
                   const head = branch;
                   compareUrl = `https://github.com/${owner}/${name}/compare/${base}..${head}`;

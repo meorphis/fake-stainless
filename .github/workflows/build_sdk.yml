@@ -10,9 +10,10 @@ on:
 
 env:
   OAS_PATH: openapi.yml
-  CONFIG_PATH: ''
+  CONFIG_PATH: '' # optional
   STAINLESS_ORG_NAME: meorphis-test
   STAINLESS_PROJECT_NAME: fake-stainless
+  FAIL_RUN_ON: "error" # "note" | "warning" | "error" | "fatal" | "never"
 
 jobs:
   preview-sdk:
@@ -32,13 +33,11 @@ jobs:
           echo "Merge base: $BASE_SHA"
           echo "merge_base_sha=$BASE_SHA" >> $GITHUB_OUTPUT
 
-      - name: Compute MD5 hash of old OpenAPI spec
+      - name: Compute MD5 hash of old OpenAPI spec and config
         id: old-oas-hash
         run: |
-          # Check out the merge base
           git checkout ${{ steps.merge-base.outputs.merge_base_sha }}
 
-          # Compute oas MD5 hash if the file exists
           if [ -f "${{ env.OAS_PATH }}" ]; then
             MD5_HASH=$(md5sum "${{ env.OAS_PATH }}" | awk '{ print $1 }')
           else
@@ -46,11 +45,9 @@ jobs:
             MD5_HASH=""
           fi
 
-          # Output the hash
           echo "old_oas_hash=$MD5_HASH" >> $GITHUB_OUTPUT
           echo "old_oas_hash=$MD5_HASH"
 
-          # Compute config MD5 hash if the file exists
           if [ -f "${{ env.CONFIG_PATH }}" ]; then
             MD5_HASH_CONFIG=$(md5sum "${{ env.CONFIG_PATH }}" | awk '{ print $1 }')
           else
@@ -58,41 +55,30 @@ jobs:
             MD5_HASH_CONFIG=""
           fi
 
-          # Output the hash
           echo "old_config_hash=$MD5_HASH_CONFIG" >> $GITHUB_OUTPUT
           echo "old_config_hash=$MD5_HASH_CONFIG"
 
-          # Switch back to the merge commit
           git checkout ${GITHUB_SHA}
 
       - name: Build SDK
-        uses: stainless-api/build-sdk-action@main
+        id: build-sdk
+        uses: stainless-api/build-sdk-action@d370a61982516ab4317ab75e4df2fbc11a5a0c8a
         with:
           stainless_api_key: ${{ secrets.STAINLESS_API_KEY }}
           oas_path: ${{ env.OAS_PATH }}
+          config_path: ${{ env.CONFIG_PATH }}
           project_name: ${{ env.STAINLESS_PROJECT_NAME }}
           parent_oas_hash: ${{ steps.old-oas-hash.outputs.old_oas_hash }}
           parent_config_hash: ${{ steps.old-oas-hash.outputs.old_config_hash }}
           parent_branch: ${{ github.base_ref }}
           branch: preview/${{ github.head_ref }}
-          guess_config: false
-
-      - name: Process SDK Build Results
-        id: process-results
-        run: |
-          if [ -f build_sdk_results.json ]; then
-            RESULTS=$(jq -c '.' build_sdk_results.json)
-            echo "build_sdk_results=${RESULTS}" >> "$GITHUB_OUTPUT"
-          else
-            echo "build_sdk_results.json not found."
-            echo "build_sdk_results={}" >> "$GITHUB_OUTPUT"
-          fi
+          guess_config: true
 
       - name: Comment on Pull Request
         uses: actions/github-script@v6
         with:
           script: |
-            const results = JSON.parse(`${{ steps.process-results.outputs.build_sdk_results }}`);
+            const results = JSON.parse(`${{ steps.build-sdk.outputs.results }}`);
             const outcomes = results.outcomes || {};
             const parentOutcomes = results.parentOutcomes || {};
 
@@ -116,6 +102,15 @@ jobs:
                   } else {
                     notes = `Could not generate a diff link because a parent build was not found`;
                   }
+                }
+              } else if (outcome.merge_conflict_pr) {
+                const { number, repo: { owner, name } } = outcome.merge_conflict_pr;
+                const mergeConflictUrl = `https://github.com/${owner}/${name}/pull/${number}`;
+                const runUrl = `https://github.com/${context.payload.repository.full_name}/actions/runs/${context.runId}`;
+                if (outcome.conclusion === 'upstream_merge_conflict') {
+                  notes = `A preview could not be generated because there is a conflict on the parent branch. Please resolve the [conflict](${mergeConflictUrl}) then re-run the [workflow](${runUrl}).`;
+                } else {
+                  notes = `The build resulted in a merge conflict. Please resolve the [conflict](${mergeConflictUrl}) then re-run the [workflow](${runUrl}).`;
                 }
               } else {
                 notes = `Could not generate a branch or diff link because the build had conclusion: ${outcome.conclusion}`;
@@ -141,18 +136,28 @@ jobs:
                 })
                 .join("");
 
+              const npmRepo = (outcomes['typescript'] ?? outcomes['node'])?.commit?.repo;
+              const npmInstallCommand = npmRepo ? `# ${outcomes['typescript'] ? 'typescript' : 'node'}
+            npm install "https://github.com/${npmRepo.owner}/${npmRepo.name}.git#${npmRepo.branch}"` : '';
+
+              const pythonRepo = outcomes['python']?.commit?.repo;
+              const pythonInstallCommand = pythonRepo ? `# python
+            pip install git+https://github.com/${pythonRepo.owner}/${pythonRepo.name}.git@${pythonRepo.branch}` : '';
+
+              const installation = npmInstallCommand || pythonInstallCommand ? `#### :package: Installation
+            ${[npmInstallCommand, pythonInstallCommand].filter(Boolean).map(cmd => `\`\`\`bash\n${cmd}\n\`\`\``).join('\n')}` : '';
+
               const commentBody = `
             ### :sparkles: SDK Previews
-            Last updated: ${new Date().toLocaleString()}
+            _Last updated: ${new Date().toISOString().replace('T', ' ').replace(/\.\d+Z$/, ' UTC')}_
 
             The following table summarizes the build outcomes for all languages:
 
             ${header}${tableRows}
 
-            You can freely modify the branches to add [custom code](https://app.stainlessapi.com/docs/guides/patch-custom-code).
+            You can freely modify the branches to add [custom code](https://app.stainlessapi.com/docs/guides/patch-custom-code).${installation ? `\n${installation}` : ''}
               `;
 
-              // Check for existing comment
               const { data: comments } = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -164,7 +169,6 @@ jobs:
               );
 
               if (existingComment) {
-                // Edit the existing comment
                 await github.rest.issues.updateComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -172,7 +176,6 @@ jobs:
                   body: commentBody,
                 });
               } else {
-                // Create a new comment
                 await github.rest.issues.createComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -180,6 +183,24 @@ jobs:
                   body: commentBody,
                 });
               }
+
+      - name: Check results
+        run: |
+          FAIL_RUN_ON="${{ env.FAIL_RUN_ON }}"
+          [ "$FAIL_RUN_ON" = "never" ] && exit 0
+
+          FILTER=".value.commit == null"
+          [ "$FAIL_RUN_ON" = "error" -o "$FAIL_RUN_ON" = "warning" -o "$FAIL_RUN_ON" = "note" ] && FILTER="$FILTER or .value.conclusion == \"error\""
+          [ "$FAIL_RUN_ON" = "warning" -o "$FAIL_RUN_ON" = "note" ] && FILTER="$FILTER or .value.conclusion == \"warning\""
+          [ "$FAIL_RUN_ON" = "note" ] && FILTER="$FILTER or .value.conclusion == \"note\""
+
+          FAILED_LANGUAGES=$(echo '${{ steps.build-sdk.outputs.results }}' | jq -r ".outcomes | to_entries[] | select($FILTER) | .key")
+
+          if [ -n "$FAILED_LANGUAGES" ]; then
+            echo -e "\e[31mThe following languages did not build successfully: $FAILED_LANGUAGES\e[0m"
+            exit 1
+          fi
+
   merge-sdk:
     if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'main'
     runs-on: ubuntu-latest
@@ -188,59 +209,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Get latest PR body
-        uses: actions/github-script@v6
-        id: get-pr-body
-        with:
-          script: |
-            const { data: pullRequest } = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number
-            });
-            return pullRequest.body;
-
-      - name: Parse SDK commit message
-        id: parse-commit-message
-        env:
-          PR_BODY: ${{ steps.get-pr-body.outputs.result }}
-        run: |
-          # Read the PR description from environment variable
-          PR_DESCRIPTION="$PR_BODY"
-
-          # Use grep to safely extract the commit message between backticks
-          COMMIT_MESSAGE=$(echo "$PR_DESCRIPTION" | grep -oP '`SDK commit message:\s*\K[^`]+' || echo "")
-
-          echo "commit_message=$COMMIT_MESSAGE" >> $GITHUB_OUTPUT
-          echo "commit_message=$COMMIT_MESSAGE"
-
       - name: Build SDK
-        uses: stainless-api/build-sdk-action@main
+        id: build-sdk
+        uses: stainless-api/build-sdk-action@d370a61982516ab4317ab75e4df2fbc11a5a0c8a
         with:
           stainless_api_key: ${{ secrets.STAINLESS_API_KEY }}
           oas_path: ${{ env.OAS_PATH }}
+          config_path: ${{ env.CONFIG_PATH }}
           project_name: ${{ env.STAINLESS_PROJECT_NAME }}
-          commit_message: ${{ steps.parse-commit-message.outputs.commit_message }}
+          commit_message: ${{ github.event.pull_request.title }}
           branch: main
           merge_branch: preview/${{ github.head_ref }}
           guess_config: false
-
-      - name: Process SDK Build Results
-        id: process-results
-        run: |
-          if [ -f build_sdk_results.json ]; then
-            RESULTS=$(jq -c '.' build_sdk_results.json)
-            echo "build_sdk_results=${RESULTS}" >> "$GITHUB_OUTPUT"
-          else
-            echo "build_sdk_results.json not found."
-            echo "build_sdk_results={}" >> "$GITHUB_OUTPUT"
-          fi
 
       - name: Comment on Pull Request
         uses: actions/github-script@v6
         with:
           script: |
-            const results = JSON.parse(`${{ steps.process-results.outputs.build_sdk_results }}`);
+            const results = JSON.parse(`${{ steps.build-sdk.outputs.results }}`);
             const outcomes = results.outcomes || {};
 
             const generateRow = (lang, outcome) => {
@@ -276,7 +262,6 @@ jobs:
             ${header}${tableRows}
               `;
 
-              // Check for preview comment
               const { data: comments } = await github.rest.issues.listComments({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
@@ -288,7 +273,6 @@ jobs:
               );
 
               if (previewComment) {
-                // Delete the preview comment
                 await github.rest.issues.deleteComment({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
@@ -302,3 +286,20 @@ jobs:
                 issue_number: context.issue.number,
                 body: commentBody,
               });
+
+      - name: Check results
+        run: |
+          FAIL_RUN_ON="${{ env.FAIL_RUN_ON }}"
+          [ "$FAIL_RUN_ON" = "never" ] && exit 0
+
+          FILTER=".value.commit == null"
+          [ "$FAIL_RUN_ON" = "error" -o "$FAIL_RUN_ON" = "warning" -o "$FAIL_RUN_ON" = "note" ] && FILTER="$FILTER or .value.conclusion == \"error\""
+          [ "$FAIL_RUN_ON" = "warning" -o "$FAIL_RUN_ON" = "note" ] && FILTER="$FILTER or .value.conclusion == \"warning\""
+          [ "$FAIL_RUN_ON" = "note" ] && FILTER="$FILTER or .value.conclusion == \"note\""
+
+          FAILED_LANGUAGES=$(echo '${{ steps.build-sdk.outputs.results }}' | jq -r ".outcomes | to_entries[] | select($FILTER) | .key")
+
+          if [ -n "$FAILED_LANGUAGES" ]; then
+            echo -e "\e[31mThe following languages did not build successfully: $FAILED_LANGUAGES\e[0m"
+            exit 1
+          fi

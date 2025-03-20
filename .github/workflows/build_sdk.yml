@@ -97,20 +97,28 @@ jobs:
             const parentOutcomes = results.parentOutcomes || {};
 
             const generateRow = (lang, outcome, parentOutcome) => {
+              const studioUrl = `https://app.stainlessapi.com/${process.env.STAINLESS_ORG_NAME}/${process.env.STAINLESS_PROJECT_NAME}/studio?language=${lang}&branch=preview/${{ github.head_ref }}`;
               let githubUrl;
-              let studioUrl;
               let compareUrl;
+              let notes = '';
 
               if (outcome.commit) {
                 const { owner, name, branch } = outcome.commit.repo;
                 githubUrl = `https://github.com/${owner}/${name}/tree/${branch}`;
-                studioUrl = `https://app.stainlessapi.com/${process.env.STAINLESS_ORG_NAME}/${process.env.STAINLESS_PROJECT_NAME}/studio?language=${lang}&branch=${branch}`;
 
                 if (parentOutcome?.commit) {
                   const base = parentOutcome.commit.sha;
                   const head = branch;
                   compareUrl = `https://github.com/${owner}/${name}/compare/${base}..${head}`;
+                } else {
+                  if (parentOutcome) {
+                    notes = `Could not generate a diff link because the build's parent had conclusion: ${parentOutcome?.conclusion}`;
+                  } else {
+                    notes = `Could not generate a diff link because a parent build was not found`;
+                  }
                 }
+              } else {
+                notes = `Could not generate a branch or diff link because the build had conclusion: ${outcome.conclusion}`;
               }
 
               const githubLink = githubUrl ? `[Branch](${githubUrl})` : '';
@@ -118,12 +126,12 @@ jobs:
               const compareLink = compareUrl ? `[Diff](${compareUrl})` : '';
 
               return `
-            | ${lang} | ${outcome.conclusion} | ${githubLink} | ${studioLink} | ${compareLink} |`;
+            | ${lang} | ${outcome.conclusion} | ${githubLink} | ${studioLink} | ${compareLink} | ${notes} |`;
             };
 
               const header = `
-            | Language | Conclusion | Branch | Studio | Diff |
-            |----------|------------|--------|--------|------|`;
+            | Language | Conclusion | Branch | Studio | Diff | Notes |
+            |----------|------------|--------|--------|------|-------|`;
 
               const tableRows = Object.keys(outcomes)
                 .map(lang => {
@@ -135,6 +143,8 @@ jobs:
 
               const commentBody = `
             ### :sparkles: SDK Previews
+            Last updated: ${new Date().toLocaleString()}
+
             The following table summarizes the build outcomes for all languages:
 
             ${header}${tableRows}
@@ -265,6 +275,26 @@ jobs:
 
             ${header}${tableRows}
               `;
+
+              // Check for preview comment
+              const { data: comments } = await github.rest.issues.listComments({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.payload.pull_request.number,
+              });
+
+              const previewComment = comments.find((comment) =>
+                comment.body.includes("### :sparkles: SDK Previews")
+              );
+
+              if (previewComment) {
+                // Delete the preview comment
+                await github.rest.issues.deleteComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  comment_id: previewComment.id,
+                });
+              }
 
               await github.rest.issues.createComment({
                 owner: context.repo.owner,

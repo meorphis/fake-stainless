@@ -24,10 +24,27 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 2
+
+      - name: Check if either OAS or config is changed
+        id: config-changed
+        run: |
+          CHANGED_FILES=$(git diff --name-only "${GITHUB_SHA}^1" "${GITHUB_SHA}")
+          echo "Changed files: $CHANGED_FILES"
+
+          if echo "$CHANGED_FILES" | grep -q "${{ env.OAS_PATH }}"; then
+            echo "OAS file changed"
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+          if [ -n "${{ env.CONFIG_PATH }}" ] && echo "$CHANGED_FILES" | grep -q "${{ env.CONFIG_PATH }}"; then
+            echo "Config file changed"
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
 
       - name: Get merge base
         id: merge-base
+        if: steps.config-changed.outputs.changed == 'true'
         run: |
           BASE_SHA=$(git rev-parse "${GITHUB_SHA}^1")
           echo "Merge base: $BASE_SHA"
@@ -35,6 +52,7 @@ jobs:
 
       - name: Compute MD5 hash of old OpenAPI spec and config
         id: old-oas-hash
+        if: steps.config-changed.outputs.changed == 'true'
         run: |
           git checkout ${{ steps.merge-base.outputs.merge_base_sha }}
 
@@ -62,6 +80,7 @@ jobs:
 
       - name: Build SDK
         id: build-sdk
+        if: steps.config-changed.outputs.changed == 'true'
         uses: stainless-api/build-sdk-action@d370a61982516ab4317ab75e4df2fbc11a5a0c8a
         with:
           stainless_api_key: ${{ secrets.STAINLESS_API_KEY }}
@@ -75,6 +94,7 @@ jobs:
           guess_config: true
 
       - name: Comment on Pull Request
+        if: steps.config-changed.outputs.changed == 'true'
         uses: actions/github-script@v6
         with:
           script: |
@@ -185,6 +205,7 @@ jobs:
               }
 
       - name: Check results
+        if: steps.config-changed.outputs.changed == 'true'
         run: |
           FAIL_RUN_ON="${{ env.FAIL_RUN_ON }}"
           [ "$FAIL_RUN_ON" = "never" ] && exit 0
@@ -208,9 +229,28 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Check if either OAS or config is changed
+        id: config-changed
+        run: |
+          CHANGED_FILES=$(git diff --name-only "${GITHUB_SHA}^1" "${GITHUB_SHA}")
+          echo "Changed files: $CHANGED_FILES"
+
+          if echo "$CHANGED_FILES" | grep -q "${{ env.OAS_PATH }}"; then
+            echo "OAS file changed"
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+          if [ -n "${{ env.CONFIG_PATH }}" ] && echo "$CHANGED_FILES" | grep -q "${{ env.CONFIG_PATH }}"; then
+            echo "Config file changed"
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
 
       - name: Build SDK
         id: build-sdk
+        if: steps.config-changed.outputs.changed == 'true'
         uses: stainless-api/build-sdk-action@d370a61982516ab4317ab75e4df2fbc11a5a0c8a
         with:
           stainless_api_key: ${{ secrets.STAINLESS_API_KEY }}
@@ -223,6 +263,7 @@ jobs:
           guess_config: false
 
       - name: Comment on Pull Request
+        if: steps.config-changed.outputs.changed == 'true'
         uses: actions/github-script@v6
         with:
           script: |
@@ -288,6 +329,7 @@ jobs:
               });
 
       - name: Check results
+        if: steps.config-changed.outputs.changed == 'true'
         run: |
           FAIL_RUN_ON="${{ env.FAIL_RUN_ON }}"
           [ "$FAIL_RUN_ON" = "never" ] && exit 0

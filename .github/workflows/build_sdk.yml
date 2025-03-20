@@ -10,7 +10,6 @@ on:
 
 env:
   OAS_PATH: openapi.yml
-  CONFIG_PATH: '' # optional
   STAINLESS_ORG_NAME: meorphis-test
   STAINLESS_PROJECT_NAME: fake-stainless
   FAIL_RUN_ON: "error" # "note" | "warning" | "error" | "fatal" | "never"

@@ -1,13 +1,13 @@
 openapi: 3.0.0
 info:
   title: Builds API
-  version: '1.0.3'
+  version: '1.0.0'
   description: API for managing and retrieving build information
 
 paths:
   /v1/builds/{id}/outputs/{target}:
     get:
-      summary: Retrieve build output!
+      summary: Retrieve build output!!
       description: Get the output status and details for a specific target for a specific build!
       parameters:
         - name: id

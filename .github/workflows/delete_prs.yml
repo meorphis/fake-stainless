@@ -1,0 +1,61 @@
+name: Delete PRs with Prefix
+
+on:
+  schedule:
+    - cron: '0 0 * * *' # daily at midnight
+  workflow_dispatch:
+
+jobs:
+  delete-prefix-prs:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Delete PRs with prefix
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const prefix = 'codegen/cli/';
+            
+            const { data: pulls } = await github.rest.pulls.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              per_page: 100
+            });
+            
+            console.log(`Found ${pulls.length} open PRs total`);
+            
+            const targetPRs = pulls.filter(pr => pr.head.ref.startsWith(prefix));
+            
+            console.log(`Found ${targetPRs.length} PRs with prefix "${prefix}"`);
+            
+            for (const pr of targetPRs) {
+              await github.rest.pulls.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                state: 'closed'
+              });
+              
+              console.log(`Closed PR #${pr.number}`);
+
+              const ref = `heads/${pr.head.ref}`;
+              try {
+                await github.rest.git.deleteRef({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  ref: ref
+                });
+              } catch (error) {
+                console.log(`Failed to delete branch ${pr.head.ref}: ${error.message}`);
+              }
+            }
+            
+            if (targetPRs.length === 0) {
+              console.log(`No PRs with prefix "${prefix}" found to delete`);
+            } else {
+              console.log(`Successfully processed ${targetPRs.length} PRs with prefix "${prefix}"`);
+            }

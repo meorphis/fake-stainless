@@ -17,7 +17,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            const prefix = 'codegen/cli/';
+            const prefix = 'preview-';
             
             const { data: pulls } = await github.rest.pulls.list({
               owner: context.repo.owner,
@@ -43,6 +43,7 @@ jobs:
               console.log(`Closed PR #${pr.number}`);
 
               const ref = `heads/${pr.head.ref}`;
+
               try {
                 await github.rest.git.deleteRef({
                   owner: context.repo.owner,

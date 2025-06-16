@@ -32,7 +32,7 @@ jobs:
           fetch-depth: 2
 
       - name: Run preview builds
-        uses: stainless-api/build-sdk-action/preview@6f432dd17e7aa07d53d7dfb01f03eefd8f3c5df2
+        uses: stainless-api/build-sdk-action/preview@73a7c4a1b5883214c1c73f5dac152e7db0c60484
         with:
           stainless_api_key: ${{ secrets.STAINLESS_API_KEY }}
           org: ${{ env.STAINLESS_ORG }}

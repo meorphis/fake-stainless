@@ -7,8 +7,8 @@ info:
 paths:
   /v1/builds/{id}/outputs/{target}:
     get:
-      summary: Retrieve build output!
-      description: Get the output status and details for a specific target for a specific build!
+      summary: Retrieve!
+      description: Get the output status and details for a specific target for a specific build! :)
       parameters:
         - name: id
           in: path
@@ -24,7 +24,7 @@ paths:
           description: The target to get the output for
       responses:
         '200':
-          description: Successful response
+          description: Successful response!!!!!
           content:
             application/json:
               schema:
